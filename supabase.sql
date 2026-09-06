@@ -1,35 +1,23 @@
--- Schéma v2 : postes récurrents avec historique de montants + solde de départ + date exacte des mouvements
--- À exécuter dans l'éditeur SQL de ton projet Supabase.
+-- Schéma v3 : récurrence flexible (mensuelle ou tous les X jours) + exceptions par occurrence
+-- À exécuter dans l'éditeur SQL de ton projet Supabase, en plus des scripts précédents déjà passés.
 
--- Nouvelle table des postes récurrents (remplace fixed_items).
--- group_id relie les tranches successives d'un même poste (ex. "Loyer" à 700 puis 710).
-create table if not exists recurring_items (
+alter table recurring_items add column if not exists recurrence_type text not null default 'monthly'
+  check (recurrence_type in ('monthly', 'interval'));
+alter table recurring_items add column if not exists interval_days int;
+alter table recurring_items add column if not exists anchor_date date;
+
+-- Une exception = une occurrence précise d'un poste récurrent (identifiée par group_id + sa date théorique)
+-- dont le montant et/ou la date sont modifiés pour cette seule fois, ou carrément supprimée (skip).
+create table if not exists recurring_exceptions (
   id uuid primary key default gen_random_uuid(),
-  group_id uuid not null default gen_random_uuid(),
-  label text not null,
-  amount numeric not null,
-  type text not null check (type in ('income', 'expense')),
-  start_month text not null,      -- 'YYYY-MM', premier mois où ce montant s'applique
-  end_month text,                 -- 'YYYY-MM', dernier mois où ce montant s'applique (NULL = toujours en cours)
-  day_of_month int not null default 1 check (day_of_month between 1 and 31),
-  created_at timestamptz default now()
+  group_id uuid not null,
+  occurrence_date date not null,       -- la date théorique de l'occurrence visée (celle calculée par la règle)
+  override_amount numeric,             -- NULL = montant habituel conservé
+  override_date date,                  -- NULL = date habituelle conservée
+  override_label text,
+  skip boolean not null default false, -- true = cette occurrence est retirée entièrement
+  created_at timestamptz default now(),
+  unique (group_id, occurrence_date)
 );
 
--- Ajoute la date exacte à chaque mouvement ponctuel (pour le calendrier et la saisie dans le passé).
-alter table transactions add column if not exists date date default current_date;
-
--- Solde de départ, pour calculer le solde théorique reporté mois après mois.
-create table if not exists settings (
-  id boolean primary key default true check (id),
-  starting_balance numeric not null default 0,
-  starting_balance_month text not null default to_char(now(), 'YYYY-MM')
-);
-insert into settings (id) values (true) on conflict (id) do nothing;
-
-alter table recurring_items disable row level security;
-alter table settings disable row level security;
-
--- Si tu avais déjà des lignes dans l'ancienne table "fixed_items", tu peux les migrer
--- manuellement en les recréant dans l'onglet "Fixes" de l'appli (généralement 1 ou 2 lignes).
--- Optionnel, une fois que tu as vérifié que tout fonctionne :
--- drop table if exists fixed_items;
+alter table recurring_exceptions disable row level security;
